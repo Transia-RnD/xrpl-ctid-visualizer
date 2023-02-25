@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<!--
+XRPL serialized object format visualizer
+Author: Richard Holland
+Date: 6 October 2020
+-->
+<html>
+
+<head>
+  <title>XRPL CTID Visualizer</title>
+
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+    }
+
+    div#errormsg {
+      margin: 0em .8em 0.8em .8em;
+      padding: 1em;
+      border-radius: 5px;
+      border: 1px solid red;
+      display: none;
+      color: #b72c00;
+      font-weight: bold;
+      font-family: monospace;
+      padding-left: 1.4em;
+    }
+
+
+    .clickable:before {
+      content: "👉";
+      color: black;
+      cursor: pointer;
+    }
+
+    .clickable {
+      cursor: pointer;
+      background: rgb(43 3 244 / 9%);
+      margin: 0.3em;
+      line-height: 1.2em;
+      padding-left: 0.2em;
+      padding-right: 0.2em;
+    }
+
+    .tainput {
+      width: calc(100vw - 2em);
+      height: 20vh;
+      margin: 1em;
+      box-sizing: border-box;
+      border-radius: 5px;
+      border: 1px solid #9C27B0;
+      padding: 1em;
+    }
+
+    .output {
+      background: hsl(0 0% 98% / 1);
+      margin: 0em .8em 0.8em .8em;
+      padding: 1em;
+      border: 1px solid #2196F3;
+      border-radius: 5px;
+      font-family: monospace;
+      overflow-wrap: break-word;
+    }
+
+    .payloadhex.right {
+      color: rgb(224 5 5);
+    }
+
+    .left {
+      margin-right: 1em;
+      border-right: 1px solid black;
+      padding-right: 1em;
+      font: small-caption;
+      font-size: small;
+      text-align: right;
+      max-width: 20em;
+      color: #673AB7;
+      font-family: monospace;
+      display: inline-block;
+      width: 20em;
+    }
+
+    .right:before {
+      content: "0x";
+      font-weight: normal;
+      color: #9e9e9e5e;
+      margin-right: 0.1em;
+    }
+
+    .right {
+      display: inline-block;
+      text-align: left;
+      font-family: monospace;
+      font-weight: bold;
+      color: hsl(227deg 100% 46%);
+      vertical-align: top;
+      text-indent: -1.3em;
+      padding-left: 1.3em;
+      word-break: break-word;
+      width: calc(100vw - 35em);
+    }
+
+    .fieldtext:before {
+      content: "Field-code";
+      font-size: smaller;
+      margin-right: 2em;
+      color: orange;
+      position: absolute;
+      left: 2em;
+    }
+
+    .typetext:before {
+      content: "CTID Value";
+      font-size: smaller;
+      margin-right: 2em;
+      color: orange;
+      position: absolute;
+      left: 2em;
+    }
+
+    .payloadtext:before {
+      content: "Field-contents";
+      font-size: smaller;
+      margin-right: 2em;
+      color: orange;
+      position: absolute;
+      left: 2em;
+    }
+
+    .invalid {}
+
+    .type {}
+
+    .field {}
+
+    .explain {}
+
+    .payload {}
+  </style>
+  <script>
+    const decodeCTID = (ctid) => {
+      let ctidValue;
+      if (typeof (ctid) === 'string') {
+        if (!/^[0-9A-F]+$/.test(ctid))
+          throw new Error("ctid must be a hexadecimal string or BigInt");
+
+        if (ctid.length !== 16)
+          throw new Error("ctid must be exactly 16 nibbles and start with a C");
+
+        ctidValue = BigInt('0x' + ctid);
+      }
+      else if (typeof (ctid) === 'bigint')
+        ctidValue = ctid;
+      else
+        throw new Error("ctid must be a hexadecimal string or BigInt");
+
+      if (ctidValue > 0xFFFFFFFFFFFFFFFFn ||
+        (ctidValue & 0xF000000000000000n) != 0xC000000000000000n)
+        throw new Error("ctid must be exactly 16 nibbles and start with a C");
+
+      const ledger_seq = Number((ctidValue >> 32n) & 0xFFFFFFFn);
+      const txn_index = Number((ctidValue >> 16n) & 0xFFFFn);
+      const network_id = Number(ctidValue & 0xFFFFn);
+      return {
+        ledger_seq,
+        txn_index,
+        network_id
+      };
+    };
+  </script>
+  <script>
+
+    var parse_stack = [] // when using objects inside objects this is used, by run_
+
+    var indent_level = 0
+
+    function print_error(c, out) {
+      out.innerHTML += "<br/><div class='invalid left'>Invalid character</div><div class='invalid right'>" +
+        c + "</div>";
+    }
+
+    function print_type(t, h, out) {
+
+      let s = "Unknown";
+
+      if (h == 0) {
+        s = "Ledger Sequence"
+      }
+
+      if (h == 1) {
+        s = "Txn Index"
+      }
+
+      if (h == 2) {
+        s = "Network ID"
+      }
+
+      out.innerHTML += "<br/><div style='margin-left: " + indent_level + "em' class='type'><div class='typetext left'><b>" + s
+        + "</b></div><div class='typehex right'>" + t + "</div></div>"
+    }
+
+    function print_explain(h, msg, out, nnl) {
+      out.innerHTML += (typeof (nnl) == "undefined" ? "" : "<br/>") +
+        "<div class='explain' style='margin-left: " + indent_level + "em'><div class='explaintext left'>" + msg + "</div>" +
+        "<div class='explainhex right'>" + h + "</div></div>";
+    }
+
+    function print_explain_payload(h, msg, out, nnl) {
+      out.innerHTML += (typeof (nnl) == "undefined" ? "" : "<br/>") +
+        "<div class='explain' style='margin-left: " + indent_level + "em'><div class='explaintext left'>" + msg + "</div>" +
+        "<div class='payloadhex right'>" + h + "</div></div>";
+    }
+
+    function print_explain_payload_special(h, msg, out, nnl, breakdown) {
+      out.innerHTML += (typeof (nnl) == "undefined" ? "" : "<br/>") +
+        "<div class='explain' style='margin-left: " + indent_level + "em'><div class='explaintext left'>" + msg + "</div>" +
+        "<div class='payloadhex right'>" + h + '<div style="font-weight: normal; color: purple; margin-left:3em;">' + breakdown + '</div></div></div>';
+    }
+
+    function print_payload(t, f, h, msg, out) {
+
+      out.innerHTML += "<br/>" +
+        "<div class='payload' style='margin-left: " + indent_level + "em'><div class='payloadtext left'>" + msg + "</div>" +
+        "<div class='payloadhex right'>" + h + "</div></div>";
+
+    }
+
+    function inpele() {
+      return document.getElementsByTagName("textarea")[0]
+    }
+
+    function errorele() {
+      return document.getElementById("errormsg")
+    }
+
+    // these functions help report errors to the user
+    function clear() {
+      inpele().style.background = "white"
+      var m = make_up_link()
+      if (m == "") {
+        errorele().innerHTML = ""
+        errorele().style.display = "none"
+      } else {
+        errorele().innerHTML = m
+        errorele().style.display = "block"
+        errorele().style.background = "#ffffff"
+        errorele().style.color = "#3F51B5"
+        errorele().style.border = "1px solid blue";
+      }
+    }
+
+    function good() {
+      inpele().style.background = "#e0ffd7"
+      var m = make_up_link()
+      errorele().innerHTML = "Looks like a valid CTID. " + m
+      errorele().style.display = "block"
+      errorele().style.background = "#d7ffdc"
+      errorele().style.color = "#3F51B5"
+      errorele().style.border = "1px solid blue";
+
+    }
+
+    function bad(msg) {
+      inpele().style.background = "#ffd7d7"
+      errorele().style.background = "#ffd7d7"
+      errorele().innerHTML = msg + make_up_link()
+      errorele().style.display = "block"
+      errorele().style.color = "#F44336"
+      errorele().style.border = "1px solid red";
+    }
+
+    function make_up_link() {
+      return (parse_stack.length > 0 ? "<a class='clickable' onclick='pop_()'>Go up</a>" : "")
+    }
+
+    function info(msg) {
+      inpele().style.background = "#fafafa"
+      errorele().style.background = "#fafafa"
+      errorele().innerHTML = msg + make_up_link()
+      errorele().style.display = "block"
+      errorele().style.color = "#3F51B5"
+      errorele().style.border = "1px solid blue";
+    }
+
+    function ugly(msg) {
+      inpele().style.background = "#ffecd7"
+      errorele().style.background = "#ffecd7"
+      errorele().innerHTML = msg + make_up_link()
+      errorele().style.display = "block"
+      errorele().style.color = "#F44336"
+      errorele().style.border = "1px solid red";
+    }
+
+    function run_(x) {
+      parse_stack.push(inpele().value)
+      inpele().value = x
+      run(0, true)
+    }
+
+    function pop_() {
+      if (parse_stack.length == 0) {
+        console.log("could not pop, no elements on stack")
+        return
+      }
+
+      const v = parse_stack[parse_stack.length - 1]
+      parse_stack.pop()
+      inpele().value = v
+      run(0, true)
+    }
+
+    // convert the leaf values in a json object to links that populate the decoder
+    function convert_json_to_links(j) {
+      Object.keys(j).forEach(function (key) {
+        var t = typeof (j[key])
+        if (t == "object")
+          j[key] = convert_json_to_links(j[key])
+        else if (t == "string") {
+          var inp = j[key].replace(/\s/gi, '')
+          if (inp.match(/^[A-Fa-f0-9]+$/) || inp.match(/^[-A-Za-z0-9+/]*={0,3}$/))
+            j[key] = '<a class=vvvv~clickablevvvv~ onclick=vvvv~run_(~vvvv' + inp + '~vvvv)vvvv~>' + j[key] + '</a>'
+        }
+      })
+
+      return j
+    }
+
+    function obj_to_html(j) {
+      var t = JSON.stringify(j)
+      if (!t.match(/vvvv~/) && !t.match(/~vvvv/)) {
+        j = convert_json_to_links(j)
+        var s = JSON.stringify(j, null, 2)
+        s = s.replaceAll("vvvv~", "'").replaceAll("~vvvv", '"').replaceAll('\n', '<br/>')
+        s = s.replaceAll(/(<br\/> +)/g, (s, g) => { return g.replaceAll(' ', '&nbsp;'); })
+        return s
+      } else {
+        var s = JSON.stringify(j, null, 2)
+        s = s.replaceAll(/(<br\/> +)/g, (s, g) => { return g.replaceAll(' ', '&nbsp;'); })
+        return s
+      }
+    }
+
+    function run(depth, dontclearstack) {
+      const out = document.getElementsByClassName("output")[0]
+      out.innerHTML = ""
+
+      indent_level = 0
+
+      var inp = inpele().value
+
+      if (inp == "")
+        return clear()
+
+      const inp_nospace = inp.replace(/\s/gi, '')
+
+      if (inp_nospace[0] == '{') {
+        // probably json
+        try {
+          j = JSON.parse(inp)
+          out.innerHTML = obj_to_html(j)
+          return info("You entered json... Click a field!")
+
+        } catch (e) {
+          console.log(e)
+          // do nothing
+        }
+
+      }
+
+      if (!inp_nospace.match(/^[A-Fa-f0-9]+$/) && /* not hex */
+        inp_nospace.match(/^[-A-Za-z0-9+/]*={0,3}$/)) /* and is base64 */ {
+        if (depth > 0) {
+          console.log("recusrive loop detected, stopping")
+          return
+        }
+
+        // probably base64, convert to hex
+        const binstr = atob(inp.replace(/\s/gi, ''))
+        try {
+          var j = JSON.parse(binstr)
+          out.innerHTML = obj_to_html(j)
+          return info("When decoding base64 I found it contained json... Click a field!")
+        } catch (e) {
+          console.log(e)
+
+          inp = ""
+          for (var i = 0; i < binstr.length; ++i) {
+            var hex = binstr.charCodeAt(i).toString(16)
+            if (hex.length < 2) hex = "0" + hex
+            inp += hex
+          }
+
+          document.getElementsByTagName("textarea")[0].value = inp
+          return run(depth + 1, true)
+        }
+      }
+
+      if (!inp_nospace.match(/^[A-Fa-f0-9]+$/)) /* not hex */ {
+        return bad("Input was not base64 or hex, I don't know what to do with it...")
+      }
+
+      try {
+        const decoded = decodeCTID(inp)
+        print_type(decoded.ledger_seq, 0, out)
+        print_type(decoded.txn_index, 1, out)
+        print_type(decoded.network_id, 2, out)
+
+        return good()
+      } catch (error) {
+        return ugly("Parser did not complete cleanly" + error + ", if this is an CTID it is incomplete.")
+      }
+      // print_error("?", "Unknown parsing state maybe something wasn't implemented yet? Report this!", out)
+    }
+  </script>
+</head>
+
+<body>
+  <textarea onchange="run(0, false)" rows="5" class="tainput"
+    placeholder="Paste your Rippled/XRPL related CTID here then click outside the box to decode."></textarea>
+  <div id="errormsg"></div>
+  <div class="output">
+  </div>
+</body>
+
+</html>
